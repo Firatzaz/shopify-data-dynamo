@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiPublicShopifyCallbackRouteImport } from './routes/api/public/shopify/callback'
+import { Route as ApiPublicShopifyWebhooksRouteImport } from './routes/api/public/shopify/webhooks'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -23,31 +24,46 @@ const ApiPublicShopifyCallbackRoute =
     path: '/api/public/shopify/callback',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiPublicShopifyWebhooksRoute =
+  ApiPublicShopifyWebhooksRouteImport.update({
+    id: '/api/public/shopify/webhooks',
+    path: '/api/public/shopify/webhooks',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/api/public/shopify/callback': typeof ApiPublicShopifyCallbackRoute
+  '/api/public/shopify/webhooks': typeof ApiPublicShopifyWebhooksRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/api/public/shopify/callback': typeof ApiPublicShopifyCallbackRoute
+  '/api/public/shopify/webhooks': typeof ApiPublicShopifyWebhooksRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/api/public/shopify/callback': typeof ApiPublicShopifyCallbackRoute
+  '/api/public/shopify/webhooks': typeof ApiPublicShopifyWebhooksRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/public/shopify/callback'
+  fullPaths:
+    '/' | '/api/public/shopify/callback' | '/api/public/shopify/webhooks'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/public/shopify/callback'
-  id: '__root__' | '/' | '/api/public/shopify/callback'
+  to: '/' | '/api/public/shopify/callback' | '/api/public/shopify/webhooks'
+  id:
+    | '__root__'
+    | '/'
+    | '/api/public/shopify/callback'
+    | '/api/public/shopify/webhooks'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ApiPublicShopifyCallbackRoute: typeof ApiPublicShopifyCallbackRoute
+  ApiPublicShopifyWebhooksRoute: typeof ApiPublicShopifyWebhooksRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -66,12 +82,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicShopifyCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/shopify/webhooks': {
+      id: '/api/public/shopify/webhooks'
+      path: '/api/public/shopify/webhooks'
+      fullPath: '/api/public/shopify/webhooks'
+      preLoaderRoute: typeof ApiPublicShopifyWebhooksRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ApiPublicShopifyCallbackRoute: ApiPublicShopifyCallbackRoute,
+  ApiPublicShopifyWebhooksRoute: ApiPublicShopifyWebhooksRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

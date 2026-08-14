@@ -68,7 +68,7 @@ export const Route = createFileRoute("/api/public/shopify/webhooks")({
             store_id: store.id,
             webhook_topic: topic,
             webhook_id: webhookId ? `${webhookId}:${store.id}` : null,
-            payload,
+            payload: payload as never,
             status: "pending",
           });
           // Duplicate webhook id means we already queued it — idempotent by design.
