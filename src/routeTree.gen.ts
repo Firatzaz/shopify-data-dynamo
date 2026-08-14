@@ -10,33 +10,79 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiPublicCronProcessQueueRouteImport } from './routes/api/public/cron/process-queue'
+import { Route as ApiPublicShopifyCallbackRouteImport } from './routes/api/public/shopify/callback'
+import { Route as ApiPublicShopifyWebhooksRouteImport } from './routes/api/public/shopify/webhooks'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicCronProcessQueueRoute =
+  ApiPublicCronProcessQueueRouteImport.update({
+    id: '/api/public/cron/process-queue',
+    path: '/api/public/cron/process-queue',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiPublicShopifyCallbackRoute =
+  ApiPublicShopifyCallbackRouteImport.update({
+    id: '/api/public/shopify/callback',
+    path: '/api/public/shopify/callback',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiPublicShopifyWebhooksRoute =
+  ApiPublicShopifyWebhooksRouteImport.update({
+    id: '/api/public/shopify/webhooks',
+    path: '/api/public/shopify/webhooks',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/api/public/cron/process-queue': typeof ApiPublicCronProcessQueueRoute
+  '/api/public/shopify/callback': typeof ApiPublicShopifyCallbackRoute
+  '/api/public/shopify/webhooks': typeof ApiPublicShopifyWebhooksRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/api/public/cron/process-queue': typeof ApiPublicCronProcessQueueRoute
+  '/api/public/shopify/callback': typeof ApiPublicShopifyCallbackRoute
+  '/api/public/shopify/webhooks': typeof ApiPublicShopifyWebhooksRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/api/public/cron/process-queue': typeof ApiPublicCronProcessQueueRoute
+  '/api/public/shopify/callback': typeof ApiPublicShopifyCallbackRoute
+  '/api/public/shopify/webhooks': typeof ApiPublicShopifyWebhooksRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths:
+    | '/'
+    | '/api/public/cron/process-queue'
+    | '/api/public/shopify/callback'
+    | '/api/public/shopify/webhooks'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to:
+    | '/'
+    | '/api/public/cron/process-queue'
+    | '/api/public/shopify/callback'
+    | '/api/public/shopify/webhooks'
+  id:
+    | '__root__'
+    | '/'
+    | '/api/public/cron/process-queue'
+    | '/api/public/shopify/callback'
+    | '/api/public/shopify/webhooks'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ApiPublicCronProcessQueueRoute: typeof ApiPublicCronProcessQueueRoute
+  ApiPublicShopifyCallbackRoute: typeof ApiPublicShopifyCallbackRoute
+  ApiPublicShopifyWebhooksRoute: typeof ApiPublicShopifyWebhooksRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -48,11 +94,35 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/cron/process-queue': {
+      id: '/api/public/cron/process-queue'
+      path: '/api/public/cron/process-queue'
+      fullPath: '/api/public/cron/process-queue'
+      preLoaderRoute: typeof ApiPublicCronProcessQueueRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/shopify/callback': {
+      id: '/api/public/shopify/callback'
+      path: '/api/public/shopify/callback'
+      fullPath: '/api/public/shopify/callback'
+      preLoaderRoute: typeof ApiPublicShopifyCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/shopify/webhooks': {
+      id: '/api/public/shopify/webhooks'
+      path: '/api/public/shopify/webhooks'
+      fullPath: '/api/public/shopify/webhooks'
+      preLoaderRoute: typeof ApiPublicShopifyWebhooksRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ApiPublicCronProcessQueueRoute: ApiPublicCronProcessQueueRoute,
+  ApiPublicShopifyCallbackRoute: ApiPublicShopifyCallbackRoute,
+  ApiPublicShopifyWebhooksRoute: ApiPublicShopifyWebhooksRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
