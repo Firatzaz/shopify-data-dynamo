@@ -36,7 +36,11 @@ export const startInstall = createServerFn({ method: "POST" })
   )
   .handler(async ({ data, context }) => {
     const { beginInstall } = await import("./app.server");
-    return beginInstall(context.supabase as never, context.userId, originFromRequest(), data);
+    return beginInstall(context.supabase as never, context.userId, originFromRequest(), {
+      domain: data.domain,
+      role: data.role,
+      ...(data.label ? { label: data.label } : {}),
+    });
   });
 
 export const removeStore = createServerFn({ method: "POST" })
@@ -87,7 +91,11 @@ export const upsertRule = createServerFn({ method: "POST" })
   )
   .handler(async ({ data, context }) => {
     const { saveRule } = await import("./app.server");
-    return saveRule(context.supabase as never, context.userId, data);
+    const { id, ...rest } = data;
+    return saveRule(context.supabase as never, context.userId, {
+      ...rest,
+      ...(id ? { id } : {}),
+    });
   });
 
 export const removeRule = createServerFn({ method: "POST" })
