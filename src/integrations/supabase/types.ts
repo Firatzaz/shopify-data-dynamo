@@ -180,33 +180,46 @@ export type Database = {
       }
       snapshots: {
         Row: {
+          archive_id: string | null
           event_log_range_end: string | null
           event_log_range_start: string | null
           id: string
+          name: string | null
           reason: string | null
           store_id: string | null
           taken_at: string
           user_id: string
         }
         Insert: {
+          archive_id?: string | null
           event_log_range_end?: string | null
           event_log_range_start?: string | null
           id?: string
+          name?: string | null
           reason?: string | null
           store_id?: string | null
           taken_at?: string
           user_id: string
         }
         Update: {
+          archive_id?: string | null
           event_log_range_end?: string | null
           event_log_range_start?: string | null
           id?: string
+          name?: string | null
           reason?: string | null
           store_id?: string | null
           taken_at?: string
           user_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "snapshots_archive_id_fkey"
+            columns: ["archive_id"]
+            isOneToOne: false
+            referencedRelation: "snapshot_archives"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "snapshots_store_id_fkey"
             columns: ["store_id"]
@@ -258,6 +271,45 @@ export type Database = {
           shopify_domain?: string
           status?: string
           user_id?: string
+        }
+        Relationships: []
+      }
+      subscriptions: {
+        Row: {
+          created_at: string
+          features: Json
+          id: string
+          plan: Database["public"]["Enums"]["plan_tier"]
+          rule_limit: number
+          store_limit: number
+          sync_events_monthly_limit: number
+          updated_at: string
+          user_id: string
+          valid_until: string | null
+        }
+        Insert: {
+          created_at?: string
+          features?: Json
+          id?: string
+          plan?: Database["public"]["Enums"]["plan_tier"]
+          rule_limit?: number
+          store_limit?: number
+          sync_events_monthly_limit?: number
+          updated_at?: string
+          user_id: string
+          valid_until?: string | null
+        }
+        Update: {
+          created_at?: string
+          features?: Json
+          id?: string
+          plan?: Database["public"]["Enums"]["plan_tier"]
+          rule_limit?: number
+          store_limit?: number
+          sync_events_monthly_limit?: number
+          updated_at?: string
+          user_id?: string
+          valid_until?: string | null
         }
         Relationships: []
       }
@@ -315,6 +367,7 @@ export type Database = {
         Row: {
           active: boolean
           buffer_quantity: number
+          conflict_resolution: string
           created_at: string
           destination_store_id: string
           dry_run: boolean
@@ -326,6 +379,7 @@ export type Database = {
         Insert: {
           active?: boolean
           buffer_quantity?: number
+          conflict_resolution?: string
           created_at?: string
           destination_store_id: string
           dry_run?: boolean
@@ -337,6 +391,7 @@ export type Database = {
         Update: {
           active?: boolean
           buffer_quantity?: number
+          conflict_resolution?: string
           created_at?: string
           destination_store_id?: string
           dry_run?: boolean
@@ -370,7 +425,7 @@ export type Database = {
       [_ in never]: never
     }
     Enums: {
-      [_ in never]: never
+      plan_tier: "free" | "starter" | "pro" | "enterprise"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -497,6 +552,8 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      plan_tier: ["free", "starter", "pro", "enterprise"],
+    },
   },
 } as const

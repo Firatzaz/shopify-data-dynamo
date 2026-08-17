@@ -27,6 +27,7 @@ type RuleRow = {
   buffer_quantity: number;
   dry_run: boolean;
   active: boolean;
+  conflict_resolution: string;
 };
 
 export type QueueRow = {
@@ -212,7 +213,7 @@ export async function processQueueItem(admin: Admin, item: QueueRow): Promise<Pr
   const { data: rules } = await admin
     .from("sync_rules")
     .select(
-      "id, source_store_id, destination_store_id, field_toggles, buffer_quantity, dry_run, active",
+      "id, source_store_id, destination_store_id, field_toggles, buffer_quantity, dry_run, active, conflict_resolution",
     )
     .eq("source_store_id", sourceStore.id)
     .eq("active", true)
@@ -278,8 +279,10 @@ export async function processQueueItem(admin: Admin, item: QueueRow): Promise<Pr
       continue;
     }
 
-    if (variant.available === target) {
-      events++;
+    const resolution = rule.conflict_resolution ?? "source_wins";
+    let finalTarget = target;
+
+    if (resolution === "manual" && variant.available !== target) {
       await logEvent(admin, {
         user_id: userId,
         store_id: destStore.id,
@@ -292,8 +295,37 @@ export async function processQueueItem(admin: Admin, item: QueueRow): Promise<Pr
         old_value: String(variant.available),
         new_value: String(target),
         source: "sync_engine",
+        status: "needs_review",
+        message: `Manuel onay bekliyor: ${sourceStore.shopify_domain} → ${destStore.shopify_domain} (kaynak ${available}, hedef ${variant.available}, hedeflenen ${target})`,
+      });
+      events++;
+      continue;
+    }
+
+    if (resolution === "destination_wins") {
+      finalTarget = variant.available;
+    } else if (resolution === "max") {
+      finalTarget = Math.max(target, variant.available);
+    } else if (resolution === "min") {
+      finalTarget = Math.min(target, variant.available);
+    }
+
+    if (variant.available === finalTarget) {
+      events++;
+      await logEvent(admin, {
+        user_id: userId,
+        store_id: destStore.id,
+        origin_store_id: sourceStore.id,
+        webhook_id: item.webhook_id,
+        entity_type: "inventory",
+        entity_id: variant.variantId,
+        sku,
+        field: "inventory_quantity",
+        old_value: String(variant.available),
+        new_value: String(finalTarget),
+        source: "sync_engine",
         status: "no_change",
-        message: "Hedef değer zaten güncel",
+        message: resolution === "destination_wins" ? "Hedef mağaza kazandı — değişiklik yapılmadı" : "Hedef değer zaten güncel",
       });
       continue;
     }
@@ -309,11 +341,11 @@ export async function processQueueItem(admin: Admin, item: QueueRow): Promise<Pr
         sku,
         field: "inventory_quantity",
         old_value: String(variant.available),
-        new_value: String(target),
+        new_value: String(finalTarget),
         source: "sync_engine",
         status: "dry_run",
         dry_run: true,
-        message: `Deneme modu: ${variant.title} ${variant.available} → ${target} (yazılmadı)`,
+        message: `Deneme modu: ${variant.title} ${variant.available} → ${finalTarget} (yazılmadı)`,
       });
       events++;
       continue;
@@ -326,7 +358,7 @@ export async function processQueueItem(admin: Admin, item: QueueRow): Promise<Pr
         apiVersion: destStore.api_version,
         inventoryItemId: variant.inventoryItemId,
         locationId: variant.locationId,
-        quantity: target,
+        quantity: finalTarget,
         referenceNote: `sync from ${sourceStore.shopify_domain}`,
       });
       await logEvent(admin, {
@@ -339,10 +371,10 @@ export async function processQueueItem(admin: Admin, item: QueueRow): Promise<Pr
         sku,
         field: "inventory_quantity",
         old_value: String(variant.available),
-        new_value: String(target),
+        new_value: String(finalTarget),
         source: "sync_engine",
         status: "applied",
-        message: `${sourceStore.shopify_domain} → ${destStore.shopify_domain}`,
+        message: `Uygulandı: ${variant.title} ${variant.available} → ${finalTarget} (${sourceStore.shopify_domain} → ${destStore.shopify_domain})`,
       });
       await admin
         .from("stores")

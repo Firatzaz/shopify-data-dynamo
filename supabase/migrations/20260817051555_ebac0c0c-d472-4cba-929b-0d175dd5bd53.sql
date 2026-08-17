@@ -1,0 +1,1 @@
+CREATE POLICY "oauth_states_deny_authenticated" ON public.oauth_states FOR ALL TO authenticated USING (false) WITH CHECK (false);

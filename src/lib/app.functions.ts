@@ -35,8 +35,8 @@ export const startInstall = createServerFn({ method: "POST" })
       .parse(data),
   )
   .handler(async ({ data, context }) => {
-    const { beginInstall } = await import("./app.server");
-    return beginInstall(context.supabase as never, context.userId, originFromRequest(), {
+    const { beginInstallWithLimit } = await import("./app.server");
+    return beginInstallWithLimit(context.supabase as never, context.userId, originFromRequest(), {
       domain: data.domain,
       role: data.role,
       ...(data.label ? { label: data.label } : {}),
@@ -86,16 +86,23 @@ export const upsertRule = createServerFn({ method: "POST" })
         buffer_quantity: z.number().int().min(0).max(100000),
         dry_run: z.boolean(),
         active: z.boolean(),
+        conflict_resolution: z.enum(["source_wins", "destination_wins", "max", "min", "manual"]).optional(),
       })
       .parse(data),
   )
   .handler(async ({ data, context }) => {
-    const { saveRule } = await import("./app.server");
-    const { id, ...rest } = data;
-    return saveRule(context.supabase as never, context.userId, {
+    const { saveRule, checkLimits } = await import("./app.server");
+    if (!data.id) {
+      const limit = await checkLimits(context.supabase as never, context.userId, "rules");
+      if (!limit.allowed) throw new Error(limit.message ?? "Kural limitine ulaştınız");
+    }
+    const { id, conflict_resolution, ...rest } = data;
+    const payload: Parameters<typeof saveRule>[2] = {
       ...rest,
+      ...(conflict_resolution ? { conflict_resolution } : {}),
       ...(id ? { id } : {}),
-    });
+    };
+    return saveRule(context.supabase as never, context.userId, payload);
   });
 
 export const removeRule = createServerFn({ method: "POST" })
@@ -129,4 +136,61 @@ export const previewRuleSku = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const { previewSku } = await import("./app.server");
     return previewSku(context.supabase as never, data.ruleId, data.sku);
+  });
+
+export const fetchSubscription = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    const { getSubscription } = await import("./app.server");
+    return getSubscription(context.supabase as never, context.userId);
+  });
+
+export const fetchSnapshots = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    const { listSnapshots } = await import("./app.server");
+    return listSnapshots(context.supabase as never, context.userId);
+  });
+
+export const createSnapshotFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data) => z.object({ name: z.string().optional(), reason: z.string().optional() }).parse(data))
+  .handler(async ({ data, context }) => {
+    const { createSnapshot } = await import("./app.server");
+    const payload = {
+      ...(data.name ? { name: data.name } : {}),
+      ...(data.reason ? { reason: data.reason } : {}),
+    };
+    return createSnapshot(context.supabase as never, context.userId, payload);
+  });
+
+export const restoreSnapshotFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data) => z.object({ snapshotId: z.string().uuid() }).parse(data))
+  .handler(async ({ data, context }) => {
+    const { restoreSnapshot } = await import("./app.server");
+    return restoreSnapshot(context.supabase as never, context.userId, data.snapshotId);
+  });
+
+export const fetchPendingApprovals = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    const { listPendingApprovals } = await import("./app.server");
+    return listPendingApprovals(context.supabase as never, context.userId);
+  });
+
+export const approveEventFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data) => z.object({ eventId: z.string().uuid() }).parse(data))
+  .handler(async ({ data, context }) => {
+    const { approveEvent } = await import("./app.server");
+    return approveEvent(context.supabase as never, context.userId, data.eventId);
+  });
+
+export const rejectEventFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data) => z.object({ eventId: z.string().uuid() }).parse(data))
+  .handler(async ({ data, context }) => {
+    const { rejectEvent } = await import("./app.server");
+    return rejectEvent(context.supabase as never, context.userId, data.eventId);
   });
