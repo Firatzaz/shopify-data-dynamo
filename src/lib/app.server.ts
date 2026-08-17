@@ -703,6 +703,7 @@ export async function approveEvent(supabase: Client, userId: string, eventId: st
   if (!event) throw new Error("Onay kaydı bulunamadı");
 
   if (event.entity_type === "inventory" && event.store_id && event.sku && event.new_value != null) {
+    const sku = event.sku;
     const { data: store } = await supabaseAdmin
       .from("stores")
       .select("id, shopify_domain, access_token_encrypted, api_version")
@@ -710,7 +711,7 @@ export async function approveEvent(supabase: Client, userId: string, eventId: st
       .maybeSingle();
     if (store?.access_token_encrypted) {
       const token = await decryptToken(store.access_token_encrypted);
-      const variant = await findVariantBySku(store.shopify_domain, token, store.api_version, event.sku);
+      const variant = await findVariantBySku(store.shopify_domain, token, store.api_version, sku);
       if (variant) {
         await setInventoryQuantity({
           domain: store.shopify_domain,
