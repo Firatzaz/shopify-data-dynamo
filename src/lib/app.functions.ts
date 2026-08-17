@@ -96,11 +96,13 @@ export const upsertRule = createServerFn({ method: "POST" })
       const limit = await checkLimits(context.supabase as never, context.userId, "rules");
       if (!limit.allowed) throw new Error(limit.message ?? "Kural limitine ulaştınız");
     }
-    const { id, ...rest } = data;
-    return saveRule(context.supabase as never, context.userId, {
+    const { id, conflict_resolution, ...rest } = data;
+    const payload: Parameters<typeof saveRule>[2] = {
       ...rest,
+      ...(conflict_resolution ? { conflict_resolution } : {}),
       ...(id ? { id } : {}),
-    });
+    };
+    return saveRule(context.supabase as never, context.userId, payload);
   });
 
 export const removeRule = createServerFn({ method: "POST" })
