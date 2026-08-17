@@ -4,10 +4,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { decryptToken } from "./crypto.server";
 import {
   buildAuthorizeUrl,
+  fetchAllInventoryState,
   findVariantBySku,
   isValidShopDomain,
   normalizeDomain,
   registerWebhooks,
+  setInventoryQuantity,
   shopifyGraphQL,
 } from "./shopify.server";
 import { processQueueItem, type QueueRow } from "./sync-engine.server";
