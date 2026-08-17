@@ -35,8 +35,8 @@ export const startInstall = createServerFn({ method: "POST" })
       .parse(data),
   )
   .handler(async ({ data, context }) => {
-    const { beginInstall } = await import("./app.server");
-    return beginInstall(context.supabase as never, context.userId, originFromRequest(), {
+    const { beginInstallWithLimit } = await import("./app.server");
+    return beginInstallWithLimit(context.supabase as never, context.userId, originFromRequest(), {
       domain: data.domain,
       role: data.role,
       ...(data.label ? { label: data.label } : {}),
