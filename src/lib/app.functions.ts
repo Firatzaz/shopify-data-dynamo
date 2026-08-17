@@ -157,7 +157,11 @@ export const createSnapshotFn = createServerFn({ method: "POST" })
   .inputValidator((data) => z.object({ name: z.string().optional(), reason: z.string().optional() }).parse(data))
   .handler(async ({ data, context }) => {
     const { createSnapshot } = await import("./app.server");
-    return createSnapshot(context.supabase as never, context.userId, data);
+    const payload = {
+      ...(data.name ? { name: data.name } : {}),
+      ...(data.reason ? { reason: data.reason } : {}),
+    };
+    return createSnapshot(context.supabase as never, context.userId, payload);
   });
 
 export const restoreSnapshotFn = createServerFn({ method: "POST" })
