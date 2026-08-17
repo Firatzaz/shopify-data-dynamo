@@ -595,7 +595,7 @@ async function checksumJson(value: unknown): Promise<string> {
 
 export async function restoreSnapshot(supabase: Client, userId: string, snapshotId: string) {
   const sub = await getSubscription(supabase, userId);
-  if (!sub.features?.restore) {
+  if (!sub.features?.["restore"]) {
     throw new Error("Snapshot geri yükleme mevcut planınızda bulunmuyor.");
   }
 
