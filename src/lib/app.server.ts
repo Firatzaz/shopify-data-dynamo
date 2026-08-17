@@ -606,7 +606,7 @@ export async function restoreSnapshot(supabase: Client, userId: string, snapshot
     .select("id, archive_id, user_id")
     .eq("id", snapshotId)
     .maybeSingle();
-  if (!snapshot || snapshot.user_id !== userId) throw new Error("Yedek bulunamadı");
+  if (!snapshot || snapshot.user_id !== userId || !snapshot.archive_id) throw new Error("Yedek bulunamadı");
 
   const { data: archive } = await supabaseAdmin
     .from("snapshot_archives")
