@@ -361,6 +361,26 @@ export type InventoryStateItem = {
   title: string;
 };
 
+type InventoryStateResponse = {
+  productVariants: {
+    pageInfo: { hasNextPage: boolean; endCursor: string | null };
+    nodes: Array<{
+      id: string;
+      displayName: string;
+      sku: string | null;
+      inventoryItem: {
+        id: string;
+        inventoryLevels: {
+          nodes: Array<{
+            location: { id: string };
+            quantities: Array<{ name: string; quantity: number }>;
+          }>;
+        };
+      };
+    }>;
+  };
+};
+
 /** Paginates through all product variants and returns their current available inventory. */
 export async function fetchAllInventoryState(
   domain: string,
@@ -372,25 +392,7 @@ export async function fetchAllInventoryState(
   const pageSize = 100;
 
   for (let page = 0; page < 50; page++) {
-    const data = await shopifyGraphQL<{
-      productVariants: {
-        pageInfo: { hasNextPage: boolean; endCursor: string | null };
-        nodes: Array<{
-          id: string;
-          displayName: string;
-          sku: string | null;
-          inventoryItem: {
-            id: string;
-            inventoryLevels: {
-              nodes: Array<{
-                location: { id: string };
-                quantities: Array<{ name: string; quantity: number }>;
-              }>;
-            };
-          };
-        }>;
-      };
-    }>({
+    const data: InventoryStateResponse = await shopifyGraphQL<InventoryStateResponse>({
       domain,
       accessToken,
       apiVersion,
