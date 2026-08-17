@@ -371,10 +371,10 @@ export async function processQueueItem(admin: Admin, item: QueueRow): Promise<Pr
         sku,
         field: "inventory_quantity",
         old_value: String(variant.available),
-        new_value: String(target),
+        new_value: String(finalTarget),
         source: "sync_engine",
         status: "applied",
-        message: `${sourceStore.shopify_domain} → ${destStore.shopify_domain}`,
+        message: `Uygulandı: ${variant.title} ${variant.available} → ${finalTarget} (${sourceStore.shopify_domain} → ${destStore.shopify_domain})`,
       });
       await admin
         .from("stores")
