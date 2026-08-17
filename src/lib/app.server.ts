@@ -377,3 +377,397 @@ export async function previewSku(supabase: Client, ruleId: string, sku: string) 
           : "Deneme modu — hiçbir şey yazılmadı",
   };
 }
+
+// --- Subscriptions & limits ---
+
+export type SubscriptionRecord = {
+  id: string;
+  plan: string;
+  store_limit: number;
+  rule_limit: number;
+  sync_events_monthly_limit: number;
+  features: Record<string, boolean>;
+  valid_until: string | null;
+  created_at: string;
+};
+
+export async function getSubscription(supabase: Client, userId: string): Promise<SubscriptionRecord> {
+  const { data, error } = await supabase
+    .from("subscriptions")
+    .select(
+      "id, plan, store_limit, rule_limit, sync_events_monthly_limit, features, valid_until, created_at",
+    )
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) {
+    return {
+      id: "",
+      plan: "free",
+      store_limit: 2,
+      rule_limit: 3,
+      sync_events_monthly_limit: 500,
+      features: { restore: false, approval_queue: true, conflict_resolution: true, charts: true },
+      valid_until: null,
+      created_at: new Date().toISOString(),
+    };
+  }
+  return {
+    ...data,
+    features: (data.features as Record<string, boolean>) ?? {},
+  } as SubscriptionRecord;
+}
+
+async function getUsageCounts(supabase: Client, userId: string) {
+  const monthStart = new Date();
+  monthStart.setDate(1);
+  monthStart.setHours(0, 0, 0, 0);
+
+  const [stores, rules, events] = await Promise.all([
+    supabase.from("stores").select("id", { count: "exact", head: true }).eq("user_id", userId),
+    supabase.from("sync_rules").select("id", { count: "exact", head: true }).eq("user_id", userId),
+    supabase
+      .from("event_log")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .gte("created_at", monthStart.toISOString()),
+  ]);
+
+  return {
+    stores: stores.count ?? 0,
+    rules: rules.count ?? 0,
+    events: events.count ?? 0,
+  };
+}
+
+export async function checkLimits(
+  supabase: Client,
+  userId: string,
+  type: "stores" | "rules" | "events",
+) {
+  const sub = await getSubscription(supabase, userId);
+  const counts = await getUsageCounts(supabase, userId);
+
+  const limitMap = {
+    stores: { limit: sub.store_limit, current: counts.stores },
+    rules: { limit: sub.rule_limit, current: counts.rules },
+    events: { limit: sub.sync_events_monthly_limit, current: counts.events },
+  };
+
+  const { limit, current } = limitMap[type];
+  const allowed = current < limit;
+
+  return {
+    allowed,
+    current,
+    limit,
+    plan: sub.plan,
+    message: allowed
+      ? undefined
+      : `${type === "stores" ? "Mağaza" : type === "rules" ? "Kural" : "Aylık olay"} limitine ulaştınız. Mevcut plan: ${sub.plan} (limit: ${limit}). Daha fazlası için yükseltme yapın.`,
+  };
+}
+
+// Update beginInstall to enforce store limit.
+const originalBeginInstall = beginInstall;
+export async function beginInstallWithLimit(
+  supabase: Client,
+  userId: string,
+  origin: string,
+  input: { domain: string; label?: string; role: string },
+) {
+  const storeCheck = await checkLimits(supabase, userId, "stores");
+  if (!storeCheck.allowed) throw new Error(storeCheck.message ?? "Mağaza limitine ulaştınız");
+  return originalBeginInstall(supabase, userId, origin, input);
+}
+
+// --- Snapshots ---
+
+export type SnapshotRecord = {
+  id: string;
+  name: string | null;
+  store_id: string | null;
+  taken_at: string;
+  reason: string | null;
+  archive_id: string | null;
+};
+
+export async function listSnapshots(supabase: Client, userId: string): Promise<SnapshotRecord[]> {
+  const { data, error } = await supabase
+    .from("snapshots")
+    .select("id, name, store_id, taken_at, reason, archive_id")
+    .eq("user_id", userId)
+    .order("taken_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as SnapshotRecord[];
+}
+
+export async function createSnapshot(
+  supabase: Client,
+  userId: string,
+  input: { name?: string; reason?: string },
+) {
+  const sub = await getSubscription(supabase, userId);
+  if (!sub.features?.restore) {
+    throw new Error("Snapshot özelliği mevcut planınızda bulunmuyor. Yükseltme yapın.");
+  }
+
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+  const { data: stores } = await supabaseAdmin
+    .from("stores")
+    .select("id, shopify_domain, access_token_encrypted, api_version")
+    .eq("user_id", userId)
+    .eq("status", "active");
+
+  const fullState: Record<
+    string,
+    Array<{
+      sku: string | null;
+      available: number;
+      title: string;
+      variantId: string;
+      inventoryItemId: string;
+      locationId: string;
+    }>
+  > = {};
+  const storeIds: string[] = [];
+
+  for (const store of stores ?? []) {
+    if (!store.access_token_encrypted) continue;
+    const token = await decryptToken(store.access_token_encrypted);
+    const items = await fetchAllInventoryState(store.shopify_domain, token, store.api_version);
+    fullState[store.id] = items.map((i) => ({
+      sku: i.sku,
+      available: i.available,
+      title: i.title,
+      variantId: i.variantId,
+      inventoryItemId: i.inventoryItemId,
+      locationId: i.locationId,
+    }));
+    storeIds.push(store.id);
+  }
+
+  const allItems = Object.values(fullState).flat();
+  const checksum = await checksumJson(fullState);
+
+  const { data: archive, error: archiveError } = await supabaseAdmin
+    .from("snapshot_archives")
+    .insert({
+      user_id: userId,
+      source: "manual",
+      full_state: fullState,
+      checksum,
+      is_verified: true,
+    })
+    .select("id")
+    .single();
+  if (archiveError) throw new Error(archiveError.message);
+
+  const { data: snapshot, error: snapshotError } = await supabaseAdmin
+    .from("snapshots")
+    .insert({
+      user_id: userId,
+      name: input.name || `Yedek ${new Date().toLocaleString("tr-TR")}`,
+      reason: input.reason || "Manuel yedekleme",
+      archive_id: archive.id,
+    })
+    .select("id")
+    .single();
+  if (snapshotError) throw new Error(snapshotError.message);
+
+  return {
+    id: snapshot.id,
+    archiveId: archive.id,
+    stores: storeIds.length,
+    items: allItems.length,
+  };
+}
+
+async function checksumJson(value: unknown): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(JSON.stringify(value));
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+export async function restoreSnapshot(supabase: Client, userId: string, snapshotId: string) {
+  const sub = await getSubscription(supabase, userId);
+  if (!sub.features?.restore) {
+    throw new Error("Snapshot geri yükleme mevcut planınızda bulunmuyor.");
+  }
+
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+  const { data: snapshot } = await supabaseAdmin
+    .from("snapshots")
+    .select("id, archive_id, user_id")
+    .eq("id", snapshotId)
+    .maybeSingle();
+  if (!snapshot || snapshot.user_id !== userId) throw new Error("Yedek bulunamadı");
+
+  const { data: archive } = await supabaseAdmin
+    .from("snapshot_archives")
+    .select("full_state")
+    .eq("id", snapshot.archive_id)
+    .maybeSingle();
+  if (!archive) throw new Error("Yedek verisi bulunamadı");
+
+  const fullState = archive.full_state as Record<
+    string,
+    Array<{ sku: string | null; available: number; variantId: string; inventoryItemId: string; locationId: string }>
+  >;
+
+  let restored = 0;
+  for (const [storeId, items] of Object.entries(fullState)) {
+    const { data: store } = await supabaseAdmin
+      .from("stores")
+      .select("id, shopify_domain, access_token_encrypted, api_version")
+      .eq("id", storeId)
+      .maybeSingle();
+    if (!store?.access_token_encrypted) continue;
+
+    const token = await decryptToken(store.access_token_encrypted);
+    for (const item of items) {
+      if (!item.sku || !item.inventoryItemId || !item.locationId) continue;
+      try {
+        await setInventoryQuantity({
+          domain: store.shopify_domain,
+          accessToken: token,
+          apiVersion: store.api_version,
+          inventoryItemId: item.inventoryItemId,
+          locationId: item.locationId,
+          quantity: item.available,
+          referenceNote: `restore from snapshot ${snapshotId}`,
+        });
+        await supabaseAdmin.from("event_log").insert({
+          user_id: userId,
+          store_id: storeId,
+          entity_type: "inventory",
+          sku: item.sku,
+          field: "inventory_quantity",
+          new_value: String(item.available),
+          source: "restore",
+          status: "applied",
+          message: `Geri yükleme: snapshot ${snapshotId}`,
+        });
+        restored++;
+      } catch (error) {
+        await supabaseAdmin.from("event_log").insert({
+          user_id: userId,
+          store_id: storeId,
+          entity_type: "inventory",
+          sku: item.sku,
+          field: "inventory_quantity",
+          new_value: String(item.available),
+          source: "restore",
+          status: "failed",
+          message: error instanceof Error ? error.message : "Geri yükleme hatası",
+        });
+      }
+    }
+  }
+
+  return { restored };
+}
+
+// --- Approvals ---
+
+export type ApprovalRecord = EventRecord & { proposed_new_value: string | null };
+
+export async function listPendingApprovals(supabase: Client, userId: string): Promise<ApprovalRecord[]> {
+  const { data, error } = await supabase
+    .from("event_log")
+    .select(
+      "id, created_at, store_id, origin_store_id, entity_type, entity_id, sku, field, old_value, new_value, source, status, dry_run, message",
+    )
+    .eq("user_id", userId)
+    .eq("status", "needs_review")
+    .order("created_at", { ascending: false })
+    .limit(100);
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((row) => ({ ...row, proposed_new_value: row.new_value })) as ApprovalRecord[];
+}
+
+export async function approveEvent(supabase: Client, userId: string, eventId: string) {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+  const { data: event } = await supabaseAdmin
+    .from("event_log")
+    .select("*")
+    .eq("id", eventId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (!event) throw new Error("Onay kaydı bulunamadı");
+
+  if (event.entity_type === "inventory" && event.store_id && event.sku && event.new_value != null) {
+    const { data: store } = await supabaseAdmin
+      .from("stores")
+      .select("id, shopify_domain, access_token_encrypted, api_version")
+      .eq("id", event.store_id)
+      .maybeSingle();
+    if (store?.access_token_encrypted) {
+      const token = await decryptToken(store.access_token_encrypted);
+      const variant = await findVariantBySku(store.shopify_domain, token, store.api_version, event.sku);
+      if (variant) {
+        await setInventoryQuantity({
+          domain: store.shopify_domain,
+          accessToken: token,
+          apiVersion: store.api_version,
+          inventoryItemId: variant.inventoryItemId,
+          locationId: variant.locationId,
+          quantity: Number(event.new_value),
+          referenceNote: `approved from event ${eventId}`,
+        });
+      }
+    }
+  }
+
+  await supabaseAdmin.from("event_log").insert({
+    user_id: userId,
+    store_id: event.store_id,
+    origin_store_id: event.origin_store_id,
+    entity_type: event.entity_type,
+    entity_id: event.entity_id,
+    sku: event.sku,
+    field: event.field,
+    old_value: event.old_value,
+    new_value: event.new_value,
+    source: "approval",
+    status: "applied",
+    message: `Onaylandı ve uygulandı (olay: ${eventId})`,
+  });
+
+  return { ok: true };
+}
+
+export async function rejectEvent(supabase: Client, userId: string, eventId: string) {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+  const { data: event } = await supabaseAdmin
+    .from("event_log")
+    .select("*")
+    .eq("id", eventId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (!event) throw new Error("Onay kaydı bulunamadı");
+
+  await supabaseAdmin.from("event_log").insert({
+    user_id: userId,
+    store_id: event.store_id,
+    origin_store_id: event.origin_store_id,
+    entity_type: event.entity_type,
+    entity_id: event.entity_id,
+    sku: event.sku,
+    field: event.field,
+    old_value: event.old_value,
+    new_value: event.new_value,
+    source: "approval",
+    status: "rejected",
+    message: `Reddedildi (olay: ${eventId})`,
+  });
+
+  return { ok: true };
+}
