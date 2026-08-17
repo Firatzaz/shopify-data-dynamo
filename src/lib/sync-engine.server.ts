@@ -279,8 +279,10 @@ export async function processQueueItem(admin: Admin, item: QueueRow): Promise<Pr
       continue;
     }
 
-    if (variant.available === target) {
-      events++;
+    const resolution = rule.conflict_resolution ?? "source_wins";
+    let finalTarget = target;
+
+    if (resolution === "manual" && variant.available !== target) {
       await logEvent(admin, {
         user_id: userId,
         store_id: destStore.id,
@@ -293,8 +295,37 @@ export async function processQueueItem(admin: Admin, item: QueueRow): Promise<Pr
         old_value: String(variant.available),
         new_value: String(target),
         source: "sync_engine",
+        status: "needs_review",
+        message: `Manuel onay bekliyor: ${sourceStore.shopify_domain} → ${destStore.shopify_domain} (kaynak ${available}, hedef ${variant.available}, hedeflenen ${target})`,
+      });
+      events++;
+      continue;
+    }
+
+    if (resolution === "destination_wins") {
+      finalTarget = variant.available;
+    } else if (resolution === "max") {
+      finalTarget = Math.max(target, variant.available);
+    } else if (resolution === "min") {
+      finalTarget = Math.min(target, variant.available);
+    }
+
+    if (variant.available === finalTarget) {
+      events++;
+      await logEvent(admin, {
+        user_id: userId,
+        store_id: destStore.id,
+        origin_store_id: sourceStore.id,
+        webhook_id: item.webhook_id,
+        entity_type: "inventory",
+        entity_id: variant.variantId,
+        sku,
+        field: "inventory_quantity",
+        old_value: String(variant.available),
+        new_value: String(finalTarget),
+        source: "sync_engine",
         status: "no_change",
-        message: "Hedef değer zaten güncel",
+        message: resolution === "destination_wins" ? "Hedef mağaza kazandı — değişiklik yapılmadı" : "Hedef değer zaten güncel",
       });
       continue;
     }
