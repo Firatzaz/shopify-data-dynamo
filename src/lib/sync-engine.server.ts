@@ -27,6 +27,7 @@ type RuleRow = {
   buffer_quantity: number;
   dry_run: boolean;
   active: boolean;
+  conflict_resolution: string;
 };
 
 export type QueueRow = {
