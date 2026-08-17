@@ -341,11 +341,11 @@ export async function processQueueItem(admin: Admin, item: QueueRow): Promise<Pr
         sku,
         field: "inventory_quantity",
         old_value: String(variant.available),
-        new_value: String(target),
+        new_value: String(finalTarget),
         source: "sync_engine",
         status: "dry_run",
         dry_run: true,
-        message: `Deneme modu: ${variant.title} ${variant.available} → ${target} (yazılmadı)`,
+        message: `Deneme modu: ${variant.title} ${variant.available} → ${finalTarget} (yazılmadı)`,
       });
       events++;
       continue;
@@ -358,7 +358,7 @@ export async function processQueueItem(admin: Admin, item: QueueRow): Promise<Pr
         apiVersion: destStore.api_version,
         inventoryItemId: variant.inventoryItemId,
         locationId: variant.locationId,
-        quantity: target,
+        quantity: finalTarget,
         referenceNote: `sync from ${sourceStore.shopify_domain}`,
       });
       await logEvent(admin, {
