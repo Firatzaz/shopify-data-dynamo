@@ -351,3 +351,89 @@ export async function setInventoryQuantity(args: {
   const errors = data.inventorySetQuantities.userErrors;
   if (errors.length) throw new Error(errors.map((e) => e.message).join("; "));
 }
+
+export type InventoryStateItem = {
+  variantId: string;
+  inventoryItemId: string;
+  locationId: string;
+  sku: string | null;
+  available: number;
+  title: string;
+};
+
+/** Paginates through all product variants and returns their current available inventory. */
+export async function fetchAllInventoryState(
+  domain: string,
+  accessToken: string,
+  apiVersion: string,
+): Promise<InventoryStateItem[]> {
+  const items: InventoryStateItem[] = [];
+  let cursor: string | null = null;
+  const pageSize = 100;
+
+  for (let page = 0; page < 50; page++) {
+    const data = await shopifyGraphQL<{
+      productVariants: {
+        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+        nodes: Array<{
+          id: string;
+          displayName: string;
+          sku: string | null;
+          inventoryItem: {
+            id: string;
+            inventoryLevels: {
+              nodes: Array<{
+                location: { id: string };
+                quantities: Array<{ name: string; quantity: number }>;
+              }>;
+            };
+          };
+        }>;
+      };
+    }>({
+      domain,
+      accessToken,
+      apiVersion,
+      query: `
+        query inventoryState($first: Int!, $after: String) {
+          productVariants(first: $first, after: $after) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              id
+              displayName
+              sku
+              inventoryItem {
+                id
+                inventoryLevels(first: 5) {
+                  nodes {
+                    location { id }
+                    quantities(names: ["available"]) { name quantity }
+                  }
+                }
+              }
+            }
+          }
+        }`,
+      variables: { first: pageSize, after: cursor },
+    });
+
+    for (const variant of data.productVariants.nodes) {
+      const level = variant.inventoryItem.inventoryLevels.nodes[0];
+      if (!level) continue;
+      items.push({
+        variantId: variant.id,
+        inventoryItemId: variant.inventoryItem.id,
+        locationId: level.location.id,
+        sku: variant.sku,
+        available: level.quantities[0]?.quantity ?? 0,
+        title: variant.displayName,
+      });
+    }
+
+    if (!data.productVariants.pageInfo.hasNextPage) break;
+    cursor = data.productVariants.pageInfo.endCursor;
+    if (!cursor) break;
+  }
+
+  return items;
+}
