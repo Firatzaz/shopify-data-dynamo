@@ -508,7 +508,7 @@ export async function createSnapshot(
   input: { name?: string; reason?: string },
 ) {
   const sub = await getSubscription(supabase, userId);
-  if (!sub.features?.restore) {
+  if (!sub.features?.["restore"]) {
     throw new Error("Snapshot özelliği mevcut planınızda bulunmuyor. Yükseltme yapın.");
   }
 
