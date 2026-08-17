@@ -213,7 +213,7 @@ export async function processQueueItem(admin: Admin, item: QueueRow): Promise<Pr
   const { data: rules } = await admin
     .from("sync_rules")
     .select(
-      "id, source_store_id, destination_store_id, field_toggles, buffer_quantity, dry_run, active",
+      "id, source_store_id, destination_store_id, field_toggles, buffer_quantity, dry_run, active, conflict_resolution",
     )
     .eq("source_store_id", sourceStore.id)
     .eq("active", true)
