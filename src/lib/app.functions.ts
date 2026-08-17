@@ -86,11 +86,16 @@ export const upsertRule = createServerFn({ method: "POST" })
         buffer_quantity: z.number().int().min(0).max(100000),
         dry_run: z.boolean(),
         active: z.boolean(),
+        conflict_resolution: z.enum(["source_wins", "destination_wins", "max", "min", "manual"]).optional(),
       })
       .parse(data),
   )
   .handler(async ({ data, context }) => {
-    const { saveRule } = await import("./app.server");
+    const { saveRule, checkLimits } = await import("./app.server");
+    if (!data.id) {
+      const limit = await checkLimits(context.supabase as never, context.userId, "rules");
+      if (!limit.allowed) throw new Error(limit.message ?? "Kural limitine ulaştınız");
+    }
     const { id, ...rest } = data;
     return saveRule(context.supabase as never, context.userId, {
       ...rest,
