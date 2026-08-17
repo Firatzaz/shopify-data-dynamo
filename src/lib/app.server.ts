@@ -189,6 +189,7 @@ export async function saveRule(
     buffer_quantity: number;
     dry_run: boolean;
     active: boolean;
+    conflict_resolution?: string;
   },
 ) {
   if (input.source_store_id === input.destination_store_id) {
