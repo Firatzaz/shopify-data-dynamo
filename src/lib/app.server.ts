@@ -593,84 +593,296 @@ async function checksumJson(value: unknown): Promise<string> {
     .join("");
 }
 
-export async function restoreSnapshot(supabase: Client, userId: string, snapshotId: string) {
+// --- Katman 2 restore: uzlaştırma (reconciliation) algoritması ---
+//
+// Kesin kural: full_state ASLA olduğu gibi Shopify'a yazılmaz. Snapshot alındıktan
+// sonra gerçekleşen meşru olaylar (satış, iade, admin düzenlemesi) korunur;
+// yalnızca kullanıcının açıkça iptal ettiği olaylar/aralıklar geri alınır.
+// Sistem "hangi olay hatalı" kararını kendi başına asla vermez.
+
+type SnapshotItem = {
+  sku: string | null;
+  available: number;
+  title?: string;
+  variantId: string;
+  inventoryItemId: string;
+  locationId: string;
+};
+
+export type RestoreSelection = {
+  snapshotId: string;
+  /** Kullanıcının iptal etmek istediği olay kaynakları (ör. ["csv_import", "sync_engine"]). */
+  excludeSources?: string[];
+  /** Kullanıcının iptal etmek istediği zaman aralığı (ISO). */
+  excludeFrom?: string;
+  excludeTo?: string;
+  /** Tek tek iptal edilecek olay kimlikleri. */
+  excludeEventIds?: string[];
+  /** Sadece bu SKU'lar (boşsa snapshot'taki tüm SKU'lar). */
+  skus?: string[];
+};
+
+export type RestoreLineItem = {
+  storeId: string;
+  storeDomain: string;
+  sku: string;
+  title: string;
+  inventoryItemId: string;
+  locationId: string;
+  base: number;
+  preservedDelta: number;
+  cancelledDelta: number;
+  result: number;
+  current: number | null;
+  willChange: boolean;
+  preservedEvents: Array<{ id: string; source: string; delta: number; created_at: string }>;
+  cancelledEvents: Array<{ id: string; source: string; delta: number; created_at: string }>;
+};
+
+async function loadSnapshotWithArchive(userId: string, snapshotId: string) {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+  const { data: snapshot } = await supabaseAdmin
+    .from("snapshots")
+    .select("id, archive_id, user_id, taken_at, name")
+    .eq("id", snapshotId)
+    .maybeSingle();
+  if (!snapshot || snapshot.user_id !== userId || !snapshot.archive_id) {
+    throw new Error("Yedek bulunamadı");
+  }
+
+  const { data: archive } = await supabaseAdmin
+    .from("snapshot_archives")
+    .select("full_state, taken_at")
+    .eq("id", snapshot.archive_id)
+    .maybeSingle();
+  if (!archive) throw new Error("Yedek verisi bulunamadı");
+
+  return {
+    supabaseAdmin,
+    snapshot,
+    takenAt: (archive.taken_at as string) ?? (snapshot.taken_at as string),
+    fullState: (archive.full_state ?? {}) as Record<string, SnapshotItem[]>,
+  };
+}
+
+/** Snapshot sonrası oluşan olayları listeler — kullanıcı hangi olayı iptal edeceğini buradan seçer. */
+export async function listRestoreCandidateEvents(
+  _supabase: Client,
+  userId: string,
+  snapshotId: string,
+) {
+  const { supabaseAdmin, takenAt } = await loadSnapshotWithArchive(userId, snapshotId);
+
+  const { data } = await supabaseAdmin
+    .from("event_log")
+    .select("id, created_at, store_id, sku, source, status, old_value, new_value, message")
+    .eq("user_id", userId)
+    .eq("entity_type", "inventory")
+    .gte("created_at", takenAt)
+    .order("created_at", { ascending: true })
+    .limit(2000);
+
+  const rows = data ?? [];
+  const sources = Array.from(new Set(rows.map((r) => r.source))).sort();
+
+  return { takenAt, sources, events: rows };
+}
+
+function deltaOf(row: { old_value: string | null; new_value: string | null }) {
+  const from = Number(row.old_value);
+  const to = Number(row.new_value);
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return 0;
+  return to - from;
+}
+
+/** Dry-run önizleme: taban + korunan gerçek olaylar − iptal edilen olaylar = sonuç. */
+export async function previewRestore(supabase: Client, userId: string, selection: RestoreSelection) {
   const sub = await getSubscription(supabase, userId);
   if (!sub.features?.["restore"]) {
     throw new Error("Snapshot geri yükleme mevcut planınızda bulunmuyor.");
   }
 
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { supabaseAdmin, takenAt, fullState } = await loadSnapshotWithArchive(
+    userId,
+    selection.snapshotId,
+  );
 
-  const { data: snapshot } = await supabaseAdmin
-    .from("snapshots")
-    .select("id, archive_id, user_id")
-    .eq("id", snapshotId)
-    .maybeSingle();
-  if (!snapshot || snapshot.user_id !== userId || !snapshot.archive_id) throw new Error("Yedek bulunamadı");
+  const excludeSources = new Set(selection.excludeSources ?? []);
+  const excludeIds = new Set(selection.excludeEventIds ?? []);
+  const skuFilter = selection.skus?.length ? new Set(selection.skus) : null;
+  const from = selection.excludeFrom ? Date.parse(selection.excludeFrom) : null;
+  const to = selection.excludeTo ? Date.parse(selection.excludeTo) : null;
 
-  const { data: archive } = await supabaseAdmin
-    .from("snapshot_archives")
-    .select("full_state")
-    .eq("id", snapshot.archive_id)
-    .maybeSingle();
-  if (!archive) throw new Error("Yedek verisi bulunamadı");
+  const { data: eventRows } = await supabaseAdmin
+    .from("event_log")
+    .select("id, created_at, store_id, sku, source, status, old_value, new_value")
+    .eq("user_id", userId)
+    .eq("entity_type", "inventory")
+    .in("status", ["applied", "no_change"])
+    .gte("created_at", takenAt)
+    .order("created_at", { ascending: true })
+    .limit(5000);
 
-  const fullState = archive.full_state as Record<
-    string,
-    Array<{ sku: string | null; available: number; variantId: string; inventoryItemId: string; locationId: string }>
-  >;
+  const items: RestoreLineItem[] = [];
 
-  let restored = 0;
-  for (const [storeId, items] of Object.entries(fullState)) {
+  for (const [storeId, snapshotItems] of Object.entries(fullState)) {
     const { data: store } = await supabaseAdmin
       .from("stores")
-      .select("id, shopify_domain, access_token_encrypted, api_version")
+      .select("id, shopify_domain, access_token_encrypted, api_version, status")
       .eq("id", storeId)
       .maybeSingle();
-    if (!store?.access_token_encrypted) continue;
-
+    if (!store || store.status === "uninstalled" || !store.access_token_encrypted) continue;
     const token = await decryptToken(store.access_token_encrypted);
-    for (const item of items) {
-      if (!item.sku || !item.inventoryItemId || !item.locationId) continue;
-      try {
-        await setInventoryQuantity({
-          domain: store.shopify_domain,
-          accessToken: token,
-          apiVersion: store.api_version,
-          inventoryItemId: item.inventoryItemId,
-          locationId: item.locationId,
-          quantity: item.available,
-          referenceNote: `restore from snapshot ${snapshotId}`,
-        });
-        await supabaseAdmin.from("event_log").insert({
-          user_id: userId,
-          store_id: storeId,
-          entity_type: "inventory",
-          sku: item.sku,
-          field: "inventory_quantity",
-          new_value: String(item.available),
-          source: "restore",
-          status: "applied",
-          message: `Geri yükleme: snapshot ${snapshotId}`,
-        });
-        restored++;
-      } catch (error) {
-        await supabaseAdmin.from("event_log").insert({
-          user_id: userId,
-          store_id: storeId,
-          entity_type: "inventory",
-          sku: item.sku,
-          field: "inventory_quantity",
-          new_value: String(item.available),
-          source: "restore",
-          status: "failed",
-          message: error instanceof Error ? error.message : "Geri yükleme hatası",
-        });
+
+    for (const item of snapshotItems) {
+      if (!item.sku) continue;
+      if (skuFilter && !skuFilter.has(item.sku)) continue;
+
+      const related = (eventRows ?? []).filter(
+        (row) => row.store_id === storeId && row.sku === item.sku,
+      );
+      if (!related.length && !skuFilter) continue;
+
+      const preservedEvents: RestoreLineItem["preservedEvents"] = [];
+      const cancelledEvents: RestoreLineItem["cancelledEvents"] = [];
+
+      for (const row of related) {
+        const ts = Date.parse(row.created_at as string);
+        const inExcludedWindow =
+          (from == null || ts >= from) && (to == null || ts <= to) && (from != null || to != null);
+        const cancelled =
+          excludeIds.has(row.id as string) ||
+          excludeSources.has(row.source as string) ||
+          inExcludedWindow;
+
+        const entry = {
+          id: row.id as string,
+          source: row.source as string,
+          delta: deltaOf(row),
+          created_at: row.created_at as string,
+        };
+        if (cancelled) cancelledEvents.push(entry);
+        else preservedEvents.push(entry);
       }
+
+      const preservedDelta = preservedEvents.reduce((sum, e) => sum + e.delta, 0);
+      const cancelledDelta = cancelledEvents.reduce((sum, e) => sum + e.delta, 0);
+      const result = Math.max(0, item.available + preservedDelta);
+
+      const variant = await findVariantBySku(
+        store.shopify_domain,
+        token,
+        store.api_version,
+        item.sku,
+      );
+
+      items.push({
+        storeId,
+        storeDomain: store.shopify_domain,
+        sku: item.sku,
+        title: item.title ?? item.sku,
+        inventoryItemId: variant?.inventoryItemId ?? item.inventoryItemId,
+        locationId: variant?.locationId ?? item.locationId,
+        base: item.available,
+        preservedDelta,
+        cancelledDelta,
+        result,
+        current: variant?.available ?? null,
+        willChange: variant != null && variant.available !== result,
+        preservedEvents,
+        cancelledEvents,
+      });
     }
   }
 
-  return { restored };
+  return {
+    snapshotId: selection.snapshotId,
+    takenAt,
+    items,
+    summary: {
+      lines: items.length,
+      changing: items.filter((i) => i.willChange).length,
+      preservedEvents: items.reduce((s, i) => s + i.preservedEvents.length, 0),
+      cancelledEvents: items.reduce((s, i) => s + i.cancelledEvents.length, 0),
+    },
+  };
+}
+
+/**
+ * Onaylanmış uzlaştırma sonucunu Shopify'a yazar. `confirm` olmadan yazma yapılmaz.
+ * Yazılan değer full_state değil, uzlaştırılmış `result` değeridir.
+ */
+export async function applyRestore(
+  supabase: Client,
+  userId: string,
+  selection: RestoreSelection & { confirm: boolean },
+) {
+  if (!selection.confirm) {
+    throw new Error("Geri yükleme için önizlemeyi onaylamanız gerekiyor.");
+  }
+
+  const preview = await previewRestore(supabase, userId, selection);
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+  let applied = 0;
+  let failed = 0;
+
+  for (const line of preview.items) {
+    if (!line.willChange) continue;
+    const { data: store } = await supabaseAdmin
+      .from("stores")
+      .select("shopify_domain, access_token_encrypted, api_version")
+      .eq("id", line.storeId)
+      .maybeSingle();
+    if (!store?.access_token_encrypted) continue;
+    const token = await decryptToken(store.access_token_encrypted);
+
+    try {
+      await setInventoryQuantity({
+        domain: store.shopify_domain,
+        accessToken: token,
+        apiVersion: store.api_version,
+        inventoryItemId: line.inventoryItemId,
+        locationId: line.locationId,
+        quantity: line.result,
+        referenceNote: `reconciled restore ${selection.snapshotId}`,
+      });
+      await supabaseAdmin.from("event_log").insert({
+        user_id: userId,
+        store_id: line.storeId,
+        entity_type: "inventory",
+        sku: line.sku,
+        field: "inventory_quantity",
+        old_value: String(line.current ?? ""),
+        new_value: String(line.result),
+        source: "restore",
+        status: "applied",
+        message: `Uzlaştırmalı geri yükleme: taban ${line.base}, korunan ${line.preservedDelta >= 0 ? "+" : ""}${line.preservedDelta}, iptal edilen ${line.cancelledDelta >= 0 ? "+" : ""}${line.cancelledDelta} → ${line.result}`,
+        payload: {
+          snapshot_id: selection.snapshotId,
+          preserved_event_ids: line.preservedEvents.map((e) => e.id),
+          cancelled_event_ids: line.cancelledEvents.map((e) => e.id),
+        },
+      });
+      applied++;
+    } catch (error) {
+      failed++;
+      await supabaseAdmin.from("event_log").insert({
+        user_id: userId,
+        store_id: line.storeId,
+        entity_type: "inventory",
+        sku: line.sku,
+        field: "inventory_quantity",
+        new_value: String(line.result),
+        source: "restore",
+        status: "failed",
+        message: error instanceof Error ? error.message : "Geri yükleme hatası",
+      });
+    }
+  }
+
+  return { applied, failed, evaluated: preview.items.length };
 }
 
 // --- Approvals ---
